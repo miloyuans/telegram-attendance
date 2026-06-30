@@ -1,0 +1,9 @@
+# v17 interactive cleanup
+
+- 新增 interactive_trigger_keywords，交互弹窗启动词独立配置，默认 /start/start。
+- 交互弹窗启动词只做消息开头匹配，兼容大小写，避免普通聊天包含 start 时误触发。
+- 新增 interaction_exit_keywords，默认 exit/quit/close/clos/closure，用户可关闭自己在当前群里的交互会话。
+- 交互按钮新增 ❌ Cancel，点击后立即清理本次按钮消息和触发消息，不写入打卡记录。
+- 交互按钮完成打卡后，不再编辑按钮消息为结果，而是删除交互窗口并只发送一条最终英文结果通知。
+- 交互模式最终通知固定使用英文，包括 Check in/Check out/Break 文案、英文激励语和英文固定标语。
+- 保留 v16 的群级模式、群数据隔离、休息时间扣除和自动月度汇总能力。

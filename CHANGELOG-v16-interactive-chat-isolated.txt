@@ -1,0 +1,12 @@
+# v16 interactive-chat-isolated
+
+- 重构代码结构，由单文件拆分为 config.go / telegram.go / store.go / reports.go / bot.go / main.go。
+- 新增 default_attendance_mode，默认 interactive。
+- 新增 chat_attendance_modes，支持按群 ID 指定 interactive / simple / all。
+- allowed_chat_ids 语义保持：为空允许所有群，非空只允许白名单群使用。
+- 新增英文交互按钮：💻 Check in、🛌 Check out、☕ Go to break、↩️ Come from break。
+- 新增 break_start / break_end 事件类型。
+- 新增休息扣除统计：Check in 到 Check out 之间的 Go to break ~ Come from break 不计入工作工时。
+- 新增群数据隔离：新数据写入 data/chats/chat_<chat_id>/attendance.jsonl；报表输出到 reports/chats/chat_<chat_id>/。
+- 保留旧 data_file 兼容读取，便于平滑迁移 v15 单文件数据。
+- 自动月度汇总继续保留，每月 1 号 15:00 后发送上月完整全员 XLSX。

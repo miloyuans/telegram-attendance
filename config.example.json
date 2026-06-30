@@ -1,0 +1,80 @@
+{
+  "bot_token": "PUT_YOUR_TELEGRAM_BOT_TOKEN_HERE",
+  "allowed_chat_ids": [],
+  "timezone": "Asia/Dubai",
+  "data_dir": "data/chats",
+  "data_file": "data/attendance.jsonl",
+  "reports_dir": "reports",
+  "state_file": "data/bot_state.json",
+  "lock_file": "data/bot.lock",
+  "debug": true,
+  "default_attendance_mode": "interactive",
+  "chat_attendance_modes": {
+    "-1001111111111": "interactive",
+    "-1002222222222": "simple",
+    "-1003333333333": "all"
+  },
+  "interactive_trigger_keywords": [
+    "/start",
+    "start"
+  ],
+  "interaction_exit_keywords": [
+    "exit",
+    "quit",
+    "close",
+    "clos",
+    "closure"
+  ],
+  "trigger_keywords": [
+    "1"
+  ],
+  "clock_in_keywords": [
+    "上班",
+    "打卡上班",
+    "check in"
+  ],
+  "clock_out_keywords": [
+    "下班",
+    "打卡下班",
+    "check out"
+  ],
+  "break_start_keywords": [
+    "休息",
+    "离开工作",
+    "go to break",
+    "break",
+    "start break"
+  ],
+  "break_end_keywords": [
+    "回来工作",
+    "回到工作",
+    "结束休息",
+    "come from break",
+    "back to work",
+    "end break"
+  ],
+  "cancel_keywords": [
+    "取消",
+    "取消打卡",
+    "取消上班",
+    "取消下班",
+    "取消休息"
+  ],
+  "list_keyword": "list",
+  "summary_keyword": "slist",
+  "poll_timeout_seconds": 25,
+  "summary_keep_months": 3,
+  "monthly_summary_enabled": true,
+  "monthly_summary_day": 1,
+  "monthly_summary_hour": 15,
+  "monthly_summary_minute": 0,
+  "monthly_summary_chat_ids": [],
+  "user_aliases": {
+    "123456789": "Milo Mi",
+    "@telegram_username": "员工别名"
+  },
+  "motivation_enabled": true,
+  "motivation_remote_enabled": true,
+  "motivation_candidate_count": 8,
+  "motivation_timeout_seconds": 3
+}
