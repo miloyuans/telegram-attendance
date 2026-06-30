@@ -1,0 +1,8 @@
+v18 - clean bot interaction messages and quiet motivation fallback
+
+- 交互关闭/完成后只删除机器人自己发送的按钮消息，不再尝试删除用户的 /start、exit、quit 等聊天消息，避免 Telegram message can't be deleted for everyone 报错。
+- close/exit/quit/clos/closure 仍按用户维度隔离，只关闭该用户在当前群的交互会话。
+- 英文在线激励语默认移除 api.quotable.io，避免证书过期导致重复报错。
+- 在线激励语 HTTP Client 默认关闭 HTTP/2，降低部分免费 API GOAWAY 噪音。
+- 新增 motivation_log_failures / MOTIVATION_LOG_FAILURES，默认 false；外部接口失败时静默回退到内置激励语，不影响打卡最终通知。
+- 默认 motivation_timeout_seconds 调整为 2 秒，降低打卡反馈等待时间。

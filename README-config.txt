@@ -6,6 +6,14 @@
 4. 初次测试 allowed_chat_ids 保持 []，表示允许所有群，方便先拿到真实 chat_id
 5. 终端日志里看到真实 chat_id 后，可以再填入 allowed_chat_ids；为空允许所有群，非空只允许白名单群使用打卡、报表、取消等功能
 
+v19 核心变化：
+
+1. slist 全员汇总现在会同时发送两个附件：HTML + XLSX。HTML 使用和 XLSX 一致的表格结构，方便直接在浏览器查看。
+2. interactive / all 模式下，list 和 slist 报告默认使用英文；simple 模式下保持中文。
+3. 交互按钮打卡完成后的最终结果通知已去除激励语和固定标语，只保留打卡结果与时间。
+4. 新增 manual_command_dedupe_seconds，默认 20 秒，避免同一用户短时间内重复触发 slist 导致重复附件。
+5. 仍然建议同一个 Bot Token 只运行一个实例；如果多实例运行，请确保共享同一个 state_file/lock_file，避免 Telegram 更新被多个实例重复处理。
+
 v17 核心变化：
 
 1. 交互弹窗入口改为独立配置：
@@ -18,16 +26,17 @@ v17 核心变化：
 2. 新增用户级交互关闭：
    - interaction_exit_keywords 默认 ["exit", "quit", "close", "clos", "closure"]
    - 用户直接发送这些完整字符串时，只关闭该用户在当前群里的交互会话，不影响其他用户
-   - 机器人会尝试删除按钮消息、原始触发消息和 exit/quit/close 消息；如果 Bot 不是群管理员，Telegram 可能拒绝删除用户消息，程序会忽略失败并继续运行
+   - 机器人只清理自己发出的交互按钮消息，不删除用户的 /start 或 exit/quit/close 消息，避免普通群权限下出现 deleteMessage 报错
 
 3. 交互按钮新增取消入口：
    - ❌ Cancel 按钮会立即关闭本次交互
    - 取消时只清理交互窗口，不写入打卡记录
 
 4. 交互完成后自动清理：
-   - 用户点击 Check in / Check out / Go to break / Come from break 后，会先删除交互按钮消息和触发消息
+   - 用户点击 Check in / Check out / Go to break / Come from break 后，会删除机器人发出的交互按钮消息
    - 最后只保留一条最终英文结果通知
    - 交互模式的按钮、提示、回调提示、最终结果通知均使用英文
+   - v19 起交互最终通知不再追加激励语和固定标语
 
 5. 代码保持 v16 的多文件结构：
    - config.go：配置、环境变量解析、模式解析
@@ -103,8 +112,8 @@ allowed_chat_ids：群白名单。
 
 报表说明：
 - list：生成个人当月 HTML 打卡日历。
-- slist：生成当前月全员 XLSX 汇总。
-- 自动月度汇总：默认每月 1 号 15:00 后发送上月完整全员 XLSX 工时统计表。
+- slist：生成当前月全员汇总，并同时发送 HTML + XLSX 两个附件。
+- 自动月度汇总：默认每月 1 号 15:00 后发送上月完整全员 HTML + XLSX 工时统计表。
 - 自动月度汇总防重复状态保存在 state_file 的 monthly_summary_sent 中。
 - monthly_summary_chat_ids 为空时，优先使用 allowed_chat_ids；如果 allowed_chat_ids 也为空，会从群数据目录和旧 data_file 中推断群 ID。
 
@@ -118,7 +127,7 @@ allowed_chat_ids：群白名单。
 激励语说明：
 - motivation_enabled：是否在完成通知里追加激励语，默认 true。
 - motivation_remote_enabled：是否启用互联网实时抓取，默认 true。
-- 交互模式最终通知固定使用英文激励语和英文固定标语。
+- v19 起交互模式最终通知不再追加激励语和固定标语，只保留打卡结果和时间。
 - 简化关键字模式保持原来的中/日/英随机激励语逻辑。
 
 环境变量覆盖：
@@ -135,6 +144,7 @@ CHAT_ATTENDANCE_MODES=-1001111111111:interactive,-1002222222222:simple,-10033333
 INTERACTIVE_TRIGGER_KEYWORDS=/start,start
 INTERACTION_EXIT_KEYWORDS=exit,quit,close,clos,closure
 SUMMARY_KEEP_MONTHS=3
+MANUAL_COMMAND_DEDUPE_SECONDS=20
 MONTHLY_SUMMARY_ENABLED=true
 MONTHLY_SUMMARY_DAY=1
 MONTHLY_SUMMARY_HOUR=15

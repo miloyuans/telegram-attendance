@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "2026-06-30-attendance-v17-interactive-cleanup"
+const version = "2026-06-30-attendance-v19-report-en-html-xlsx-dedupe"
 
 // =========================
 // 配置
@@ -49,6 +49,8 @@ type Config struct {
 	MotivationRemoteEnabled    bool              `json:"motivation_remote_enabled"`
 	MotivationCandidateCount   int               `json:"motivation_candidate_count"`
 	MotivationTimeoutSeconds   int               `json:"motivation_timeout_seconds"`
+	MotivationLogFailures      bool              `json:"motivation_log_failures"`
+	ManualCommandDedupeSeconds int               `json:"manual_command_dedupe_seconds"`
 	UserAliases                map[string]string `json:"user_aliases"`
 }
 
@@ -84,7 +86,9 @@ func defaultConfig() Config {
 		MotivationEnabled:          true,
 		MotivationRemoteEnabled:    true,
 		MotivationCandidateCount:   8,
-		MotivationTimeoutSeconds:   3,
+		MotivationTimeoutSeconds:   2,
+		MotivationLogFailures:      false,
+		ManualCommandDedupeSeconds: 20,
 		UserAliases:                map[string]string{},
 	}
 }
@@ -188,6 +192,16 @@ func loadConfig() (Config, error) {
 	if v := strings.TrimSpace(os.Getenv("INTERACTION_EXIT_KEYWORDS")); v != "" {
 		cfg.InteractionExitKeywords = parseStringList(v)
 	}
+	if v := strings.TrimSpace(os.Getenv("MOTIVATION_LOG_FAILURES")); v != "" {
+		cfg.MotivationLogFailures = parseBoolValue(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("MANUAL_COMMAND_DEDUPE_SECONDS")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return cfg, fmt.Errorf("MANUAL_COMMAND_DEDUPE_SECONDS 必须是大于等于 0 的整数: %s", v)
+		}
+		cfg.ManualCommandDedupeSeconds = n
+	}
 	if v := strings.TrimSpace(os.Getenv("DEBUG")); v != "" {
 		cfg.Debug = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
 	}
@@ -247,7 +261,10 @@ func loadConfig() (Config, error) {
 		cfg.MotivationCandidateCount = 20
 	}
 	if cfg.MotivationTimeoutSeconds <= 0 {
-		cfg.MotivationTimeoutSeconds = 3
+		cfg.MotivationTimeoutSeconds = 2
+	}
+	if cfg.ManualCommandDedupeSeconds < 0 {
+		cfg.ManualCommandDedupeSeconds = 20
 	}
 	if cfg.UserAliases == nil {
 		cfg.UserAliases = map[string]string{}

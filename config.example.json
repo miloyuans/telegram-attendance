@@ -64,6 +64,7 @@
   "summary_keyword": "slist",
   "poll_timeout_seconds": 25,
   "summary_keep_months": 3,
+  "manual_command_dedupe_seconds": 20,
   "monthly_summary_enabled": true,
   "monthly_summary_day": 1,
   "monthly_summary_hour": 15,
@@ -76,5 +77,6 @@
   "motivation_enabled": true,
   "motivation_remote_enabled": true,
   "motivation_candidate_count": 8,
-  "motivation_timeout_seconds": 3
+  "motivation_timeout_seconds": 2,
+  "motivation_log_failures": false
 }

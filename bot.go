@@ -227,13 +227,14 @@ func (b *Bot) releaseLocalLock() {
 }
 
 type BotState struct {
-	Offset             int64             `json:"offset"`
-	UpdatedAt          string            `json:"updated_at"`
-	MonthlySummarySent map[string]string `json:"monthly_summary_sent,omitempty"`
+	Offset               int64             `json:"offset"`
+	UpdatedAt            string            `json:"updated_at"`
+	MonthlySummarySent   map[string]string `json:"monthly_summary_sent,omitempty"`
+	RecentManualCommands map[string]string `json:"recent_manual_commands,omitempty"`
 }
 
 func (b *Bot) readStateNoLock() BotState {
-	st := BotState{MonthlySummarySent: map[string]string{}}
+	st := BotState{MonthlySummarySent: map[string]string{}, RecentManualCommands: map[string]string{}}
 	if strings.TrimSpace(b.cfg.StateFile) == "" {
 		return st
 	}
@@ -243,10 +244,13 @@ func (b *Bot) readStateNoLock() BotState {
 	}
 	if err := json.Unmarshal(data, &st); err != nil {
 		log.Printf("读取状态文件失败，将使用空状态继续: %v", err)
-		return BotState{MonthlySummarySent: map[string]string{}}
+		return BotState{MonthlySummarySent: map[string]string{}, RecentManualCommands: map[string]string{}}
 	}
 	if st.MonthlySummarySent == nil {
 		st.MonthlySummarySent = map[string]string{}
+	}
+	if st.RecentManualCommands == nil {
+		st.RecentManualCommands = map[string]string{}
 	}
 	return st
 }
@@ -257,6 +261,9 @@ func (b *Bot) writeStateNoLock(st BotState) {
 	}
 	if st.MonthlySummarySent == nil {
 		st.MonthlySummarySent = map[string]string{}
+	}
+	if st.RecentManualCommands == nil {
+		st.RecentManualCommands = map[string]string{}
 	}
 	st.UpdatedAt = time.Now().In(b.loc).Format(time.RFC3339)
 	data, _ := json.MarshalIndent(st, "", "  ")
@@ -315,6 +322,56 @@ func monthlySummaryStateKey(chatID int64, monthKey string) string {
 	return fmt.Sprintf("%d:%s", chatID, monthKey)
 }
 
+func (b *Bot) shouldSkipManualCommand(chatID, userID int64, command string, now time.Time) bool {
+	seconds := b.cfg.ManualCommandDedupeSeconds
+	if seconds <= 0 {
+		return false
+	}
+	command = normalizeCommand(command)
+	if command == "" {
+		return false
+	}
+	window := time.Duration(seconds) * time.Second
+	key := fmt.Sprintf("%d:%d:%s", chatID, userID, command)
+	now = now.In(b.loc)
+
+	b.stateMutex.Lock()
+	defer b.stateMutex.Unlock()
+	st := b.readStateNoLock()
+	if st.RecentManualCommands == nil {
+		st.RecentManualCommands = map[string]string{}
+	}
+	if prevText := st.RecentManualCommands[key]; prevText != "" {
+		if prev, err := time.Parse(time.RFC3339, prevText); err == nil {
+			prev = prev.In(b.loc)
+			if now.Sub(prev) >= 0 && now.Sub(prev) < window {
+				return true
+			}
+		}
+	}
+	st.RecentManualCommands[key] = now.Format(time.RFC3339)
+	cleanupBefore := now.Add(-1 * time.Hour)
+	for k, ts := range st.RecentManualCommands {
+		if t, err := time.Parse(time.RFC3339, ts); err == nil && t.Before(cleanupBefore) {
+			delete(st.RecentManualCommands, k)
+		}
+	}
+	b.writeStateNoLock(st)
+	return false
+}
+
+func (b *Bot) reportLanguageForChat(chatID int64) string {
+	mode := b.attendanceModeForChat(chatID)
+	if mode == "simple" {
+		return "zh"
+	}
+	return "en"
+}
+
+func (b *Bot) reportEnglishForChat(chatID int64) bool {
+	return b.reportLanguageForChat(chatID) == "en"
+}
+
 func isTelegramConflictError(err error) bool {
 	if err == nil {
 		return false
@@ -353,11 +410,11 @@ func (b *Bot) Run() error {
 	log.Printf("打卡机器人已启动")
 	log.Printf("版本: %s", version)
 	log.Printf("群数据目录: %s，兼容旧数据文件: %s，报表根目录: %s，时区: %s", b.cfg.DataDir, b.cfg.DataFile, b.cfg.ReportsDir, b.cfg.Timezone)
-	log.Printf("状态文件: %s，本机锁: %s，slist 保留月份: %d", b.cfg.StateFile, b.cfg.LockFile, b.cfg.SummaryKeepMonths)
+	log.Printf("状态文件: %s，本机锁: %s，slist 保留月份: %d，手动指令去重窗口: %ds", b.cfg.StateFile, b.cfg.LockFile, b.cfg.SummaryKeepMonths, b.cfg.ManualCommandDedupeSeconds)
 	log.Printf("月度汇总：enabled=%v day=%d time=%02d:%02d target_chats=%v", b.cfg.MonthlySummaryEnabled, b.cfg.MonthlySummaryDay, b.cfg.MonthlySummaryHour, b.cfg.MonthlySummaryMinute, b.cfg.MonthlySummaryChatIDs)
 	log.Printf("打卡模式：default=%s chat_modes=%v", b.cfg.DefaultAttendanceMode, b.cfg.ChatAttendanceModes)
 	log.Printf("打卡识别：上班=%s；下班=%s；休息=%s；返回=%s；交互启动=%s；交互退出=%s；取消=%s；报表=%s/%s", strings.Join(b.cfg.ClockInKeywords, "/"), strings.Join(b.cfg.ClockOutKeywords, "/"), strings.Join(b.cfg.BreakStartKeywords, "/"), strings.Join(b.cfg.BreakEndKeywords, "/"), strings.Join(b.cfg.InteractiveTriggerKeywords, "/"), strings.Join(b.cfg.InteractionExitKeywords, "/"), strings.Join(b.cfg.CancelKeywords, "/"), b.cfg.ListKeyword, b.cfg.SummaryKeyword)
-	log.Printf("激励语：enabled=%v remote=%v languages=zh/ja/en batch=%d timeout=%ds", b.cfg.MotivationEnabled, b.cfg.MotivationRemoteEnabled, b.cfg.MotivationCandidateCount, b.cfg.MotivationTimeoutSeconds)
+	log.Printf("激励语：enabled=%v remote=%v languages=zh/ja/en batch=%d timeout=%ds log_failures=%v", b.cfg.MotivationEnabled, b.cfg.MotivationRemoteEnabled, b.cfg.MotivationCandidateCount, b.cfg.MotivationTimeoutSeconds, b.cfg.MotivationLogFailures)
 	if len(b.cfg.AllowedChatIDs) == 0 {
 		log.Printf("ALLOWED_CHAT_IDS 为空：当前允许所有群。建议测试成功后配置指定群 chat_id。")
 	} else {
@@ -495,21 +552,42 @@ func (b *Bot) generateAndSendSummaryReport(chatID int64, records []AttendanceRec
 	}
 	b.applyConfiguredAliasesToReports(reports)
 	reportsDir := b.reportsDirForChat(chatID)
-	path, err := GenerateSummaryXLSXForMonth(reports, b.loc, reportsDir, reportMonth)
+	lang := b.reportLanguageForChat(chatID)
+
+	xlsxPath, err := GenerateSummaryXLSXForMonthLang(reports, b.loc, reportsDir, reportMonth, lang)
 	if err != nil {
 		return fmt.Errorf("生成 XLSX 汇总失败: %w", err)
 	}
+	htmlPath, err := GenerateSummaryHTMLForMonth(reports, b.loc, reportsDir, reportMonth, generatedAt, lang)
+	if err != nil {
+		return fmt.Errorf("生成 HTML 汇总失败: %w", err)
+	}
 	cleanupOldSummaryReports(reportsDir, b.cfg.SummaryKeepMonths, b.loc, generatedAt)
-	caption := b.summaryCaption(reportMonth, generatedAt, automated)
-	if err := b.tg.SendDocument(chatID, path, caption); err != nil {
+
+	caption := b.summaryCaptionForChat(chatID, reportMonth, generatedAt, automated, reportMonth.AddDate(0, 1, -1))
+	if err := b.tg.SendDocument(chatID, htmlPath, caption+b.summaryFormatSuffix(lang, "HTML")); err != nil {
+		return fmt.Errorf("发送 HTML 汇总失败: %w", err)
+	}
+	if err := b.tg.SendDocument(chatID, xlsxPath, caption+b.summaryFormatSuffix(lang, "XLSX")); err != nil {
 		return fmt.Errorf("发送 XLSX 汇总失败: %w", err)
 	}
 	return nil
 }
 
-func (b *Bot) summaryCaption(reportMonth time.Time, generatedAt time.Time, automated bool) string {
-	reportMonth = startOfMonth(reportMonth.In(b.loc))
-	monthEnd := reportMonth.AddDate(0, 1, -1)
+func (b *Bot) summaryFormatSuffix(lang, format string) string {
+	if lang == "en" {
+		return "\nFormat: " + format
+	}
+	return "\n格式：" + format
+}
+
+func (b *Bot) summaryCaptionForChat(chatID int64, reportMonth time.Time, generatedAt time.Time, automated bool, monthEnd time.Time) string {
+	if b.reportEnglishForChat(chatID) {
+		if automated {
+			return fmt.Sprintf("📊 Automatic monthly summary: all members %s attendance work-hours report\nPeriod: %s to %s\nGenerated at: %s", reportMonth.Format("2006-01"), reportMonth.Format("2006-01-02"), monthEnd.Format("2006-01-02"), generatedAt.In(b.loc).Format("2006-01-02 15:04:05"))
+		}
+		return fmt.Sprintf("Latest all-members attendance summary updated for %s. Generated at %s", reportMonth.Format("2006-01"), generatedAt.In(b.loc).Format("2006-01-02 15:04:05"))
+	}
 	if automated {
 		return fmt.Sprintf("📊 自动月度汇总：全员 %s 打卡工时统计表\n统计范围：%s ~ %s\n生成时间：%s", reportMonth.Format("2006-01"), reportMonth.Format("2006-01-02"), monthEnd.Format("2006-01-02"), generatedAt.In(b.loc).Format("2006-01-02 15:04:05"))
 	}
@@ -630,12 +708,16 @@ func (b *Bot) handlePersonalReport(msg *Message) {
 	}
 	rep.DisplayName = b.displayLabelFromUser(*msg.From)
 	rep.Username = msg.From.Username
-	path, err := GenerateHTMLReport(rep, b.loc, b.reportsDirForChat(msg.Chat.ID))
+	lang := b.reportLanguageForChat(msg.Chat.ID)
+	path, err := GenerateHTMLReport(rep, b.loc, b.reportsDirForChat(msg.Chat.ID), lang)
 	if err != nil {
 		_, _ = b.tg.SendMessage(msg.Chat.ID, "❌ 生成 HTML 报表失败: "+err.Error(), nil)
 		return
 	}
 	caption := fmt.Sprintf("%s 的 %s 打卡日历报表", rep.DisplayName, rep.MonthStart.Format("2006-01"))
+	if lang == "en" {
+		caption = fmt.Sprintf("%s attendance calendar report for %s", rep.DisplayName, rep.MonthStart.Format("2006-01"))
+	}
 	if err := b.tg.SendDocument(msg.Chat.ID, path, caption); err != nil {
 		_, _ = b.tg.SendMessage(msg.Chat.ID, "❌ 发送 HTML 报表失败: "+err.Error(), nil)
 		return
@@ -652,6 +734,12 @@ func (b *Bot) handleSummaryReport(msg *Message) {
 		return
 	}
 	now := time.Now().In(b.loc)
+	if b.shouldSkipManualCommand(msg.Chat.ID, msg.From.ID, b.cfg.SummaryKeyword, now) {
+		if b.cfg.Debug {
+			log.Printf("跳过重复 slist 指令 chat_id=%d user_id=%d", msg.Chat.ID, msg.From.ID)
+		}
+		return
+	}
 	if err := b.generateAndSendSummaryReport(msg.Chat.ID, records, now, now, false); err != nil {
 		_, _ = b.tg.SendMessage(msg.Chat.ID, "❌ "+err.Error(), nil)
 		return
@@ -668,17 +756,15 @@ func cleanupOldSummaryReports(reportsDir string, keepMonths int, loc *time.Locat
 		log.Printf("读取报表目录失败，跳过 slist 清理: %v", err)
 		return
 	}
-	const prefix = "全员_"
-	const suffix = "_打卡汇总.xlsx"
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		name := entry.Name()
-		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+		monthText, ok := summaryReportMonthFromName(name)
+		if !ok {
 			continue
 		}
-		monthText := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
 		monthTime, err := time.ParseInLocation("2006-01", monthText, loc)
 		if err != nil {
 			continue
@@ -692,6 +778,24 @@ func cleanupOldSummaryReports(reportsDir string, keepMonths int, loc *time.Locat
 			}
 		}
 	}
+}
+
+func summaryReportMonthFromName(name string) (string, bool) {
+	patterns := []struct {
+		prefix string
+		suffix string
+	}{
+		{"全员_", "_打卡汇总.xlsx"},
+		{"全员_", "_打卡汇总.html"},
+		{"All_", "_Attendance_Summary.xlsx"},
+		{"All_", "_Attendance_Summary.html"},
+	}
+	for _, p := range patterns {
+		if strings.HasPrefix(name, p.prefix) && strings.HasSuffix(name, p.suffix) {
+			return strings.TrimSuffix(strings.TrimPrefix(name, p.prefix), p.suffix), true
+		}
+	}
+	return "", false
 }
 
 func emptyUserReport(chatID int64, user User, loc *time.Location, now time.Time) *UserMonthReport {
@@ -792,6 +896,8 @@ func (b *Bot) promptAttendance(msg *Message) {
 }
 
 func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
+	// Telegram Bot 默认没有删除普通用户消息的权限；这里仅清理机器人自己发出的交互按钮消息。
+	// userMessageID 和 TriggerMessageID 都是用户消息，只用于会话归属，不再尝试 deleteMessage。
 	type deleteTarget struct {
 		ChatID    int64
 		MessageID int
@@ -808,16 +914,10 @@ func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
 		if sess.MessageID > 0 {
 			targets = append(targets, deleteTarget{ChatID: sess.ChatID, MessageID: sess.MessageID})
 		}
-		if sess.TriggerMessageID > 0 {
-			targets = append(targets, deleteTarget{ChatID: sess.ChatID, MessageID: sess.TriggerMessageID})
-		}
 		delete(b.sessions, token)
 	}
 	b.sessMutex.Unlock()
 
-	if userMessageID > 0 {
-		targets = append(targets, deleteTarget{ChatID: chatID, MessageID: userMessageID})
-	}
 	seen := map[string]bool{}
 	for _, target := range targets {
 		if target.MessageID <= 0 {
@@ -834,11 +934,9 @@ func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
 }
 
 func (b *Bot) closeSession(sess Session, deleteTrigger bool) {
+	// 仅删除机器人发出的交互内容；不再删除用户触发消息。
 	if sess.MessageID > 0 {
 		b.tryDeleteMessage(sess.ChatID, sess.MessageID)
-	}
-	if deleteTrigger && sess.TriggerMessageID > 0 {
-		b.tryDeleteMessage(sess.ChatID, sess.TriggerMessageID)
 	}
 }
 
@@ -1251,6 +1349,19 @@ func fixedMotivationClosing(kind string) string {
 	}
 }
 
+func newMotivationHTTPClient(timeoutSeconds int) *http.Client {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 2
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// 部分免费 quote API 对 HTTP/2 支持不稳定，关闭 HTTP/2 可减少 GOAWAY 类噪音。
+	transport.ForceAttemptHTTP2 = false
+	return &http.Client{
+		Timeout:   time.Duration(timeoutSeconds) * time.Second,
+		Transport: transport,
+	}
+}
+
 func (b *Bot) fetchBestRemoteMotivation(kind, lang string) string {
 	count := b.cfg.MotivationCandidateCount
 	if count <= 0 {
@@ -1264,7 +1375,7 @@ func (b *Bot) fetchBestRemoteMotivation(kind, lang string) string {
 		timeout = 3
 	}
 
-	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	client := newMotivationHTTPClient(timeout)
 	urls := motivationRequestURLs(count, lang)
 	ch := make(chan []string, len(urls))
 	var wg sync.WaitGroup
@@ -1322,14 +1433,12 @@ func motivationRequestURLs(count int, lang string) []string {
 				urls = append(urls, "https://v1.hitokoto.cn/?encode=json&c=a&c=b&c=c&min_length=6&max_length=60&"+cacheKey)
 			}
 		case "en":
-			// 英语候选源。多个源并行请求，任何一个失败都不会影响打卡。
-			switch i % 3 {
+			// 英语候选源。api.quotable.io 曾出现证书过期，默认不再使用；任何外部失败都会走本地兜底。
+			switch i % 2 {
 			case 0:
-				urls = append(urls, "https://api.quotable.io/random?tags=inspirational|success&maxLength=120&"+cacheKey)
-			case 1:
-				urls = append(urls, "https://zenquotes.io/api/random?"+cacheKey)
-			default:
 				urls = append(urls, "https://api.adviceslip.com/advice?"+cacheKey)
+			default:
+				urls = append(urls, "https://zenquotes.io/api/random?"+cacheKey)
 			}
 		default:
 			base := "https://v1.hitokoto.cn/?encode=json&c=k&c=f&c=d&min_length=8&max_length=42"
@@ -1348,15 +1457,15 @@ func (b *Bot) fetchMotivationCandidates(client *http.Client, apiURL string, lang
 	req.Header.Set("Accept", "application/json,text/plain;q=0.8,*/*;q=0.5")
 	resp, err := client.Do(req)
 	if err != nil {
-		if b.cfg.Debug {
-			log.Printf("获取在线激励语失败: %v", err)
+		if b.cfg.MotivationLogFailures {
+			log.Printf("获取在线激励语失败 url=%s error=%v", redactedMotivationURL(apiURL), err)
 		}
 		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		if b.cfg.Debug {
-			log.Printf("获取在线激励语 HTTP %d", resp.StatusCode)
+		if b.cfg.MotivationLogFailures {
+			log.Printf("获取在线激励语 HTTP %d url=%s", resp.StatusCode, redactedMotivationURL(apiURL))
 		}
 		return nil
 	}
@@ -1365,6 +1474,16 @@ func (b *Bot) fetchMotivationCandidates(client *http.Client, apiURL string, lang
 		return nil
 	}
 	return parseMotivationCandidates(body, lang)
+}
+
+func redactedMotivationURL(apiURL string) string {
+	if idx := strings.Index(apiURL, "?_"); idx >= 0 {
+		return apiURL[:idx]
+	}
+	if idx := strings.Index(apiURL, "&_"); idx >= 0 {
+		return apiURL[:idx]
+	}
+	return apiURL
 }
 
 func parseMotivationCandidates(body []byte, lang string) []string {

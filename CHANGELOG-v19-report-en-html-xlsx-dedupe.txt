@@ -1,0 +1,31 @@
+v19 - report language, HTML+XLSX summary, interactive feedback cleanup
+
+1. slist now sends two different attachments:
+   - HTML summary, table layout aligned with XLSX for quick review in browser.
+   - XLSX summary, same data structure for spreadsheet editing/export.
+
+2. Report language is selected by group attendance mode:
+   - interactive / all: English reports by default.
+   - simple: Chinese reports by default.
+
+3. Interactive attendance result is simplified:
+   - No motivation line.
+   - No fixed slogan.
+   - Only final attendance result and timestamp are sent.
+
+4. Manual slist duplicate protection:
+   - manual_command_dedupe_seconds defaults to 20.
+   - Same user + same group + same command inside this window is ignored.
+   - Helps avoid duplicate documents when Telegram retries an update or the same command is triggered repeatedly.
+
+5. Summary cleanup supports both old and new file names:
+   - 全员_YYYY-MM_打卡汇总.xlsx/html
+   - All_YYYY-MM_Attendance_Summary.xlsx/html
+
+6. Personal list HTML report also follows group mode language:
+   - interactive/all: English.
+   - simple: Chinese.
+
+Validation:
+- go test ./...
+- go build -o /tmp/attendance-v19 .
