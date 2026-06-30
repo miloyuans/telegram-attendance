@@ -1,0 +1,8 @@
+# v24 - Delete interactive trigger messages
+
+- Restored cleanup for user-entered interactive trigger keywords such as `/start` and `start`.
+- After Check in / Check out / Go to break / Come from break, the bot now attempts to delete:
+  1. the bot's inline interaction message;
+  2. the user's original trigger keyword message.
+- When the user closes an interaction with exit/quit/close/clos/closure, the bot attempts to delete the bot interaction message, the original trigger message, and the exit command message.
+- Deleting user messages requires the bot to have delete-message/admin permission in the group. If Telegram refuses deletion, the attendance result flow is not affected, and errors are only logged when debug is enabled.

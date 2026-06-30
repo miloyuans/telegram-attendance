@@ -925,8 +925,9 @@ func (b *Bot) promptAttendance(msg *Message) {
 }
 
 func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
-	// Telegram Bot 默认没有删除普通用户消息的权限；这里仅清理机器人自己发出的交互按钮消息。
-	// userMessageID 和 TriggerMessageID 都是用户消息，只用于会话归属，不再尝试 deleteMessage。
+	// 清理当前用户在当前群里的交互会话。
+	// 目标：关闭旧交互时删除机器人按钮消息，同时尽量删除用户输入的交互触发/退出关键词消息，让群里最终只保留结果通知。
+	// 注意：删除用户消息需要 Bot 在群里具备删除消息权限；权限不足时仅在 debug 模式记录，不影响主流程。
 	type deleteTarget struct {
 		ChatID    int64
 		MessageID int
@@ -943,9 +944,17 @@ func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
 		if sess.MessageID > 0 {
 			targets = append(targets, deleteTarget{ChatID: sess.ChatID, MessageID: sess.MessageID})
 		}
+		if sess.TriggerMessageID > 0 {
+			targets = append(targets, deleteTarget{ChatID: sess.ChatID, MessageID: sess.TriggerMessageID})
+		}
 		delete(b.sessions, token)
 	}
 	b.sessMutex.Unlock()
+
+	// 用户输入 exit/quit/close 等退出词时，也尝试清理这条退出词消息。
+	if userMessageID > 0 {
+		targets = append(targets, deleteTarget{ChatID: chatID, MessageID: userMessageID})
+	}
 
 	seen := map[string]bool{}
 	for _, target := range targets {
@@ -963,9 +972,13 @@ func (b *Bot) closeUserSessions(chatID, userID int64, userMessageID int) bool {
 }
 
 func (b *Bot) closeSession(sess Session, deleteTrigger bool) {
-	// 仅删除机器人发出的交互内容；不再删除用户触发消息。
+	// 完成交互后删除机器人按钮消息；deleteTrigger=true 时同步尝试删除用户输入的 /start/start 等触发关键词消息。
+	// 若 Bot 没有删除用户消息权限，失败不会影响最终打卡结果输出。
 	if sess.MessageID > 0 {
 		b.tryDeleteMessage(sess.ChatID, sess.MessageID)
+	}
+	if deleteTrigger && sess.TriggerMessageID > 0 {
+		b.tryDeleteMessage(sess.ChatID, sess.TriggerMessageID)
 	}
 }
 

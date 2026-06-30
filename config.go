@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "2026-06-30-attendance-v22-summary-xlsx-en-default"
+const version = "2026-06-30-attendance-v24-delete-trigger-message"
 
 // =========================
 // 配置
