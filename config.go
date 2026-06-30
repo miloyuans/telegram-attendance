@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "2026-06-30-attendance-v19-report-en-html-xlsx-dedupe"
+const version = "2026-06-30-attendance-v20-interactive-no-motivation"
 
 // =========================
 // 配置

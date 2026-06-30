@@ -1278,11 +1278,9 @@ func (b *Bot) formatAttendanceFeedback(mentionHTML, kind string, t time.Time) st
 }
 
 func (b *Bot) formatAttendanceFeedbackEnglish(mentionHTML, kind string, t time.Time) string {
-	text := fmt.Sprintf("%s %s %s completed ✅\nTime: %s", mentionHTML, kindIcon(kind), kindDisplayName(kind), t.Format("2006-01-02 15:04:05"))
-	if line := b.motivationLineEnglish(kind); line != "" {
-		text += "\n" + line
-	}
-	return text
+	// Interactive mode must stay clean and concise: only the final action result and time.
+	// Motivation lines and fixed slogans are intentionally kept for simple keyword mode only.
+	return fmt.Sprintf("%s %s %s completed ✅\nTime: %s", mentionHTML, kindIcon(kind), kindDisplayName(kind), t.Format("2006-01-02 15:04:05"))
 }
 
 func (b *Bot) motivationLine(kind string) string {

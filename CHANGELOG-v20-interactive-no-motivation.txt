@@ -1,0 +1,10 @@
+v20 - interactive feedback without motivation lines
+
+- Fixed interactive button attendance feedback so it only outputs the final action result and timestamp.
+- Removed motivation lines and fixed slogans from interactive-mode callback output.
+- Kept motivation lines and fixed slogans in simple keyword mode only.
+- Added regression tests to ensure interactive feedback stays concise while simple keyword feedback still keeps motivation text.
+
+Validation:
+- go test ./...
+- go build -o /tmp/attendance-v20 .
