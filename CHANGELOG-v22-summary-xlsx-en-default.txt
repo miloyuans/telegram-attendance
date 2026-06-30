@@ -1,0 +1,7 @@
+v22-summary-xlsx-en-default
+
+1. slist and automatic monthly summary no longer switch report language by attendance mode.
+2. Default summary report output is exactly one English XLSX file.
+3. slist zh and slist cn output exactly one Chinese XLSX file.
+4. /slist@bot zh is supported.
+5. The legacy report_multi_format_enabled option remains accepted for compatibility, but slist and monthly summary now use single-XLSX output to prevent duplicate reports.

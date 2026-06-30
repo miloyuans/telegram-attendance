@@ -410,7 +410,7 @@ func (b *Bot) Run() error {
 	log.Printf("打卡机器人已启动")
 	log.Printf("版本: %s", version)
 	log.Printf("群数据目录: %s，兼容旧数据文件: %s，报表根目录: %s，时区: %s", b.cfg.DataDir, b.cfg.DataFile, b.cfg.ReportsDir, b.cfg.Timezone)
-	log.Printf("状态文件: %s，本机锁: %s，slist 保留月份: %d，手动指令去重窗口: %ds", b.cfg.StateFile, b.cfg.LockFile, b.cfg.SummaryKeepMonths, b.cfg.ManualCommandDedupeSeconds)
+	log.Printf("状态文件: %s，本机锁: %s，slist 保留月份: %d，手动指令去重窗口: %ds，汇总报表: 默认英文单 XLSX，slist zh/cn 输出中文单 XLSX", b.cfg.StateFile, b.cfg.LockFile, b.cfg.SummaryKeepMonths, b.cfg.ManualCommandDedupeSeconds)
 	log.Printf("月度汇总：enabled=%v day=%d time=%02d:%02d target_chats=%v", b.cfg.MonthlySummaryEnabled, b.cfg.MonthlySummaryDay, b.cfg.MonthlySummaryHour, b.cfg.MonthlySummaryMinute, b.cfg.MonthlySummaryChatIDs)
 	log.Printf("打卡模式：default=%s chat_modes=%v", b.cfg.DefaultAttendanceMode, b.cfg.ChatAttendanceModes)
 	log.Printf("打卡识别：上班=%s；下班=%s；休息=%s；返回=%s；交互启动=%s；交互退出=%s；取消=%s；报表=%s/%s", strings.Join(b.cfg.ClockInKeywords, "/"), strings.Join(b.cfg.ClockOutKeywords, "/"), strings.Join(b.cfg.BreakStartKeywords, "/"), strings.Join(b.cfg.BreakEndKeywords, "/"), strings.Join(b.cfg.InteractiveTriggerKeywords, "/"), strings.Join(b.cfg.InteractionExitKeywords, "/"), strings.Join(b.cfg.CancelKeywords, "/"), b.cfg.ListKeyword, b.cfg.SummaryKeyword)
@@ -506,7 +506,7 @@ func (b *Bot) trySendMonthlySummary(now time.Time) {
 			log.Printf("自动月度汇总读取打卡数据失败 chat_id=%d: %v", chatID, err)
 			continue
 		}
-		if err := b.generateAndSendSummaryReport(chatID, records, reportMonth, now, true); err != nil {
+		if err := b.generateAndSendSummaryReport(chatID, records, reportMonth, now, true, "en"); err != nil {
 			log.Printf("自动月度汇总发送失败 chat_id=%d month=%s: %v", chatID, monthKey, err)
 			continue
 		}
@@ -541,9 +541,10 @@ func uniqueSortedChatIDs(ids []int64) []int64 {
 	return out
 }
 
-func (b *Bot) generateAndSendSummaryReport(chatID int64, records []AttendanceRecord, reportMonth time.Time, generatedAt time.Time, automated bool) error {
+func (b *Bot) generateAndSendSummaryReport(chatID int64, records []AttendanceRecord, reportMonth time.Time, generatedAt time.Time, automated bool, lang string) error {
 	reportMonth = startOfMonth(reportMonth.In(b.loc))
 	generatedAt = generatedAt.In(b.loc)
+	lang = normalizeSummaryLanguage(lang)
 	var reports map[int64]*UserMonthReport
 	if automated || !startOfMonth(generatedAt).Equal(reportMonth) {
 		reports = BuildReportsForFullMonth(records, chatID, b.loc, reportMonth, generatedAt)
@@ -552,37 +553,64 @@ func (b *Bot) generateAndSendSummaryReport(chatID int64, records []AttendanceRec
 	}
 	b.applyConfiguredAliasesToReports(reports)
 	reportsDir := b.reportsDirForChat(chatID)
-	lang := b.reportLanguageForChat(chatID)
 
 	xlsxPath, err := GenerateSummaryXLSXForMonthLang(reports, b.loc, reportsDir, reportMonth, lang)
 	if err != nil {
 		return fmt.Errorf("生成 XLSX 汇总失败: %w", err)
 	}
-	htmlPath, err := GenerateSummaryHTMLForMonth(reports, b.loc, reportsDir, reportMonth, generatedAt, lang)
-	if err != nil {
-		return fmt.Errorf("生成 HTML 汇总失败: %w", err)
-	}
 	cleanupOldSummaryReports(reportsDir, b.cfg.SummaryKeepMonths, b.loc, generatedAt)
 
-	caption := b.summaryCaptionForChat(chatID, reportMonth, generatedAt, automated, reportMonth.AddDate(0, 1, -1))
-	if err := b.tg.SendDocument(chatID, htmlPath, caption+b.summaryFormatSuffix(lang, "HTML")); err != nil {
-		return fmt.Errorf("发送 HTML 汇总失败: %w", err)
-	}
-	if err := b.tg.SendDocument(chatID, xlsxPath, caption+b.summaryFormatSuffix(lang, "XLSX")); err != nil {
+	caption := b.summaryCaptionForLang(lang, reportMonth, generatedAt, automated, reportMonth.AddDate(0, 1, -1))
+	if err := b.tg.SendDocument(chatID, xlsxPath, caption); err != nil {
 		return fmt.Errorf("发送 XLSX 汇总失败: %w", err)
 	}
 	return nil
 }
 
-func (b *Bot) summaryFormatSuffix(lang, format string) string {
-	if lang == "en" {
-		return "\nFormat: " + format
+func normalizeSummaryLanguage(lang string) string {
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	switch lang {
+	case "zh", "cn", "zh-cn", "chinese":
+		return "zh"
+	default:
+		return "en"
 	}
-	return "\n格式：" + format
 }
 
-func (b *Bot) summaryCaptionForChat(chatID int64, reportMonth time.Time, generatedAt time.Time, automated bool, monthEnd time.Time) string {
-	if b.reportEnglishForChat(chatID) {
+func summaryLanguageFromArgs(args []string) string {
+	for _, arg := range args {
+		switch strings.ToLower(strings.TrimSpace(arg)) {
+		case "zh", "cn", "zh-cn", "chinese", "中文":
+			return "zh"
+		case "en", "eng", "english":
+			return "en"
+		}
+	}
+	return "en"
+}
+
+func commandWithArgs(text string) (string, []string) {
+	fields := strings.Fields(strings.TrimSpace(text))
+	if len(fields) == 0 {
+		return "", nil
+	}
+	name := strings.ToLower(strings.TrimSpace(fields[0]))
+	if strings.HasPrefix(name, "/") {
+		name = strings.TrimPrefix(name, "/")
+		if idx := strings.Index(name, "@"); idx >= 0 {
+			name = name[:idx]
+		}
+	}
+	args := make([]string, 0, len(fields)-1)
+	for _, field := range fields[1:] {
+		args = append(args, strings.ToLower(strings.TrimSpace(field)))
+	}
+	return name, args
+}
+
+func (b *Bot) summaryCaptionForLang(lang string, reportMonth time.Time, generatedAt time.Time, automated bool, monthEnd time.Time) string {
+	lang = normalizeSummaryLanguage(lang)
+	if lang == "en" {
 		if automated {
 			return fmt.Sprintf("📊 Automatic monthly summary: all members %s attendance work-hours report\nPeriod: %s to %s\nGenerated at: %s", reportMonth.Format("2006-01"), reportMonth.Format("2006-01-02"), monthEnd.Format("2006-01-02"), generatedAt.In(b.loc).Format("2006-01-02 15:04:05"))
 		}
@@ -623,19 +651,20 @@ func (b *Bot) handleMessage(msg *Message) {
 		return
 	}
 
-	cmd := normalizeCommand(text)
+	cmd, cmdArgs := commandWithArgs(text)
 	summaryCmd := normalizeCommand(b.cfg.SummaryKeyword)
 	listCmd := normalizeCommand(b.cfg.ListKeyword)
 
 	// 注意：必须先判断 slist，再判断 list，避免 slist 被 list 抢走。
-	if cmd == summaryCmd || cmd == "/"+summaryCmd {
+	if cmd == summaryCmd {
+		lang := summaryLanguageFromArgs(cmdArgs)
 		if b.cfg.Debug {
-			log.Printf("命中 slist 指令：生成全员 XLSX 汇总")
+			log.Printf("命中 slist 指令：生成全员 %s XLSX 汇总", strings.ToUpper(lang))
 		}
-		b.handleSummaryReport(msg)
+		b.handleSummaryReport(msg, lang)
 		return
 	}
-	if cmd == listCmd || cmd == "/"+listCmd {
+	if cmd == listCmd && len(cmdArgs) == 0 {
 		if b.cfg.Debug {
 			log.Printf("命中 list 指令：生成个人日历 HTML")
 		}
@@ -727,20 +756,20 @@ func (b *Bot) handlePersonalReport(msg *Message) {
 	}
 }
 
-func (b *Bot) handleSummaryReport(msg *Message) {
+func (b *Bot) handleSummaryReport(msg *Message, lang string) {
 	records, err := b.readRecordsForChat(msg.Chat.ID)
 	if err != nil {
 		_, _ = b.tg.SendMessage(msg.Chat.ID, "❌ 读取打卡数据失败: "+err.Error(), nil)
 		return
 	}
 	now := time.Now().In(b.loc)
-	if b.shouldSkipManualCommand(msg.Chat.ID, msg.From.ID, b.cfg.SummaryKeyword, now) {
+	if b.shouldSkipManualCommand(msg.Chat.ID, msg.From.ID, b.cfg.SummaryKeyword+":"+normalizeSummaryLanguage(lang), now) {
 		if b.cfg.Debug {
 			log.Printf("跳过重复 slist 指令 chat_id=%d user_id=%d", msg.Chat.ID, msg.From.ID)
 		}
 		return
 	}
-	if err := b.generateAndSendSummaryReport(msg.Chat.ID, records, now, now, false); err != nil {
+	if err := b.generateAndSendSummaryReport(msg.Chat.ID, records, now, now, false, lang); err != nil {
 		_, _ = b.tg.SendMessage(msg.Chat.ID, "❌ "+err.Error(), nil)
 		return
 	}

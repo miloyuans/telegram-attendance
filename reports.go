@@ -34,29 +34,34 @@ type ShiftItem struct {
 	BreakDuration time.Duration
 	Duration      time.Duration // actual paid/working time after subtracting break intervals
 	Breaks        []BreakItem
+	IsRealtime    bool      // true when an unfinished shift is calculated against report generation time
+	RealtimeEnd   time.Time // calculation end for realtime unfinished shifts
+	OnBreak       bool      // true when the unfinished shift is currently inside an open break interval
 }
 
 type DayReport struct {
-	Date          time.Time
-	Items         []ShiftItem
-	NormalCount   int
-	AbnormalCount int
-	TotalDuration time.Duration
+	Date               time.Time
+	Items              []ShiftItem
+	NormalCount        int
+	AbnormalCount      int
+	TotalDuration      time.Duration
+	TotalBreakDuration time.Duration
 }
 
 type UserMonthReport struct {
-	ChatID        int64
-	UserID        int64
-	DisplayName   string
-	Username      string
-	MonthStart    time.Time
-	DisplayEnd    time.Time
-	FinalizedEnd  time.Time
-	GeneratedAt   time.Time
-	Days          map[string]*DayReport
-	NormalCount   int
-	AbnormalCount int
-	TotalDuration time.Duration
+	ChatID             int64
+	UserID             int64
+	DisplayName        string
+	Username           string
+	MonthStart         time.Time
+	DisplayEnd         time.Time
+	FinalizedEnd       time.Time
+	GeneratedAt        time.Time
+	Days               map[string]*DayReport
+	NormalCount        int
+	AbnormalCount      int
+	TotalDuration      time.Duration
+	TotalBreakDuration time.Duration
 }
 
 func BuildReports(records []AttendanceRecord, chatID int64, loc *time.Location, now time.Time) map[int64]*UserMonthReport {
@@ -208,7 +213,28 @@ func buildReportsForWindow(records []AttendanceRecord, chatID int64, loc *time.L
 				item.Note = "异常：缺失下班记录"
 			} else {
 				item.Status = "pending"
-				item.Note = "未结算：当天或夜班可能仍在进行中"
+				realtimeEnd := generatedAt
+				if realtimeEnd.After(allowedEnd) {
+					realtimeEnd = allowedEnd
+				}
+				if realtimeEnd.After(inAt) {
+					item.IsRealtime = true
+					item.RealtimeEnd = realtimeEnd
+					item.GrossDuration = realtimeEnd.Sub(inAt)
+					item.Breaks, item.BreakDuration = collectBreaksWithinShift(recs, inAt, realtimeEnd, loc)
+					item.OnBreak = hasOpenBreak(item.Breaks)
+					item.Duration = item.GrossDuration - item.BreakDuration
+					if item.Duration < 0 {
+						item.Duration = 0
+					}
+					if item.OnBreak {
+						item.Note = "未结算：当前正在休息，工时已实时冻结在离开休息时间点"
+					} else {
+						item.Note = "未结算：未下班，工时实时计算到当前生成时间"
+					}
+				} else {
+					item.Note = "未结算：当天或夜班可能仍在进行中"
+				}
 			}
 			addItem(rep, item)
 		}
@@ -301,13 +327,29 @@ func addItem(rep *UserMonthReport, item ShiftItem) {
 	day.Items = append(day.Items, item)
 	if item.Status == "normal" {
 		day.NormalCount++
-		day.TotalDuration += item.Duration
 		rep.NormalCount++
-		rep.TotalDuration += item.Duration
+		addCalculatedDurations(rep, day, item)
+	} else if item.Status == "pending" {
+		addCalculatedDurations(rep, day, item)
 	} else if strings.HasPrefix(item.Status, "missing") {
 		day.AbnormalCount++
 		rep.AbnormalCount++
 	}
+}
+
+func addCalculatedDurations(rep *UserMonthReport, day *DayReport, item ShiftItem) {
+	if item.Duration > 0 {
+		day.TotalDuration += item.Duration
+		rep.TotalDuration += item.Duration
+	}
+	if item.BreakDuration > 0 {
+		day.TotalBreakDuration += item.BreakDuration
+		rep.TotalBreakDuration += item.BreakDuration
+	}
+}
+
+func hasOpenBreak(breaks []BreakItem) bool {
+	return len(breaks) > 0 && breaks[len(breaks)-1].End == nil
 }
 
 func startOfMonth(t time.Time) time.Time {
@@ -497,12 +539,12 @@ body{margin:0;background:#f4f6f8;color:#1f2937;font-family:-apple-system,BlinkMa
 		b.WriteString(metricCard("Completed shifts", strconv.Itoa(rep.NormalCount)))
 		b.WriteString(metricCard("Abnormal shifts", strconv.Itoa(rep.AbnormalCount)))
 		b.WriteString(metricCard("Total work hours", formatDurationText(rep.TotalDuration, lang)))
-		b.WriteString(metricCard("Calendar status", "Green=Normal / Red=Abnormal"))
+		b.WriteString(metricCard("Total break time", formatDurationText(rep.TotalBreakDuration, lang)))
 	} else {
 		b.WriteString(metricCard("正常班次", strconv.Itoa(rep.NormalCount)))
 		b.WriteString(metricCard("异常班次", strconv.Itoa(rep.AbnormalCount)))
 		b.WriteString(metricCard("总工时", formatDurationText(rep.TotalDuration, lang)))
-		b.WriteString(metricCard("日历状态", "绿=正常 ❌=异常"))
+		b.WriteString(metricCard("离开/休息总时长", formatDurationText(rep.TotalBreakDuration, lang)))
 	}
 	b.WriteString("</section>")
 
@@ -588,11 +630,13 @@ func renderShiftHTML(item ShiftItem, loc *time.Location, lang string) string {
 	dur := "-"
 	breakText := "-"
 	grossText := "-"
+	breakList := "-"
 	inLabel := "上班"
 	outLabel := "下班"
 	statusLabel := "状态"
 	grossLabel := "总时长"
 	breakLabel := "休息扣除"
+	breakListLabel := "休息明细"
 	workLabel := "计入工时"
 	if lang == "en" {
 		inLabel = "Check in"
@@ -600,14 +644,16 @@ func renderShiftHTML(item ShiftItem, loc *time.Location, lang string) string {
 		statusLabel = "Status"
 		grossLabel = "Gross duration"
 		breakLabel = "Break deducted"
+		breakListLabel = "Break intervals"
 		workLabel = "Work hours"
 	}
-	if item.Status == "normal" {
+	if shiftHasCalculatedDuration(item) {
 		dur = formatDurationText(item.Duration, lang)
 		grossText = formatDurationText(item.GrossDuration, lang)
 		breakText = formatDurationText(item.BreakDuration, lang)
+		breakList = breakListText(item, loc, lang)
 	}
-	return fmt.Sprintf(`<div class="shift"><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div></div>`,
+	return fmt.Sprintf(`<div class="shift"><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div><div>%s: %s</div></div>`,
 		html.EscapeString(inLabel),
 		html.EscapeString(formatClockWithDate(item.In, item.Date, loc)),
 		html.EscapeString(outLabel),
@@ -618,9 +664,58 @@ func renderShiftHTML(item ShiftItem, loc *time.Location, lang string) string {
 		html.EscapeString(grossText),
 		html.EscapeString(breakLabel),
 		html.EscapeString(breakText),
+		html.EscapeString(breakListLabel),
+		html.EscapeString(breakList),
 		html.EscapeString(workLabel),
 		html.EscapeString(dur),
 	)
+}
+
+func shiftHasCalculatedDuration(item ShiftItem) bool {
+	return item.Status == "normal" || (item.Status == "pending" && (item.GrossDuration > 0 || item.Duration > 0 || item.BreakDuration > 0))
+}
+
+func breakListText(item ShiftItem, loc *time.Location, lang string) string {
+	if len(item.Breaks) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(item.Breaks))
+	for i, br := range item.Breaks {
+		startText := "-"
+		if br.Start != nil {
+			startText = formatClockWithDate(br.Start, item.Date, loc)
+		}
+		endText := breakEndText(item, br, i == len(item.Breaks)-1, loc, lang)
+		durText := formatDurationText(br.Duration, lang)
+		if lang == "en" {
+			parts = append(parts, fmt.Sprintf("%s-%s %s", startText, endText, durText))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s-%s %s", startText, endText, durText))
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+func breakEndText(item ShiftItem, br BreakItem, isLast bool, loc *time.Location, lang string) string {
+	if br.End != nil {
+		return formatClockWithDate(br.End, item.Date, loc)
+	}
+	if item.IsRealtime && item.OnBreak && isLast {
+		if lang == "en" {
+			return "Now"
+		}
+		return "当前"
+	}
+	if item.Out != nil {
+		return formatClockWithDate(item.Out, item.Date, loc)
+	}
+	if item.IsRealtime && !item.RealtimeEnd.IsZero() {
+		if lang == "en" {
+			return "Now"
+		}
+		return "当前"
+	}
+	return "-"
 }
 
 func maxDateText(finalizedEnd, monthStart time.Time) string {
@@ -767,9 +862,11 @@ func summaryTableData(reports map[int64]*UserMonthReport, loc *time.Location, mo
 	monthDays := daysInMonth(monthStart)
 	userHeader := "用户"
 	totalHeader := "当月总工时"
+	breakTotalHeader := "当月离开/休息总时长"
 	if lang == "en" {
 		userHeader = "User"
 		totalHeader = "Monthly work hours"
+		breakTotalHeader = "Monthly break duration"
 	}
 	headers := []string{userHeader}
 	for day := 1; day <= monthDays; day++ {
@@ -780,7 +877,7 @@ func summaryTableData(reports map[int64]*UserMonthReport, loc *time.Location, mo
 			headers = append(headers, fmt.Sprintf("%d日\n%s", day, weekdayText(d, lang)))
 		}
 	}
-	headers = append(headers, totalHeader)
+	headers = append(headers, totalHeader, breakTotalHeader)
 
 	userIDs := make([]int64, 0, len(reports))
 	for uid := range reports {
@@ -801,6 +898,7 @@ func summaryTableData(reports map[int64]*UserMonthReport, loc *time.Location, mo
 			row = append(row, xlsxCell{Text: text, Style: style})
 		}
 		row = append(row, xlsxCell{Text: formatDurationText(rep.TotalDuration, lang), Style: 5})
+		row = append(row, xlsxCell{Text: formatDurationText(rep.TotalBreakDuration, lang), Style: 5})
 		rows = append(rows, row)
 	}
 	return headers, rows
@@ -829,28 +927,32 @@ func dayCellTextLang(dayReport *DayReport, d time.Time, rep *UserMonthReport, lo
 		status := shiftStatusText(item, lang)
 		dur := "-"
 		breakLine := "休息扣除 -"
+		breakListLine := "休息明细 -"
 		grossLine := "总时长 -"
 		inLabel := "上班"
 		outLabel := "下班"
 		workLabel := "计入工时"
 		if lang == "en" {
 			breakLine = "Break deducted -"
+			breakListLine = "Break intervals -"
 			grossLine = "Gross duration -"
 			inLabel = "Check in"
 			outLabel = "Check out"
 			workLabel = "Work hours"
 		}
-		if item.Status == "normal" {
+		if shiftHasCalculatedDuration(item) {
 			dur = formatDurationText(item.Duration, lang)
 			if lang == "en" {
 				grossLine = "Gross duration " + formatDurationText(item.GrossDuration, lang)
 				breakLine = "Break deducted " + formatDurationText(item.BreakDuration, lang)
+				breakListLine = "Break intervals " + breakListText(item, loc, lang)
 			} else {
 				grossLine = "总时长 " + formatDurationText(item.GrossDuration, lang)
 				breakLine = "休息扣除 " + formatDurationText(item.BreakDuration, lang)
+				breakListLine = "休息明细 " + breakListText(item, loc, lang)
 			}
 		}
-		parts = append(parts, fmt.Sprintf("%s %s\n%s %s\n%s\n%s\n%s\n%s %s",
+		parts = append(parts, fmt.Sprintf("%s %s\n%s %s\n%s\n%s\n%s\n%s\n%s %s",
 			inLabel,
 			formatClockWithDate(item.In, item.Date, loc),
 			outLabel,
@@ -858,6 +960,7 @@ func dayCellTextLang(dayReport *DayReport, d time.Time, rep *UserMonthReport, lo
 			status,
 			grossLine,
 			breakLine,
+			breakListLine,
 			workLabel,
 			dur,
 		))
@@ -888,6 +991,12 @@ func shiftStatusText(item ShiftItem, lang string) string {
 	case "missing_in":
 		return "Abnormal: missing check in"
 	case "pending":
+		if item.IsRealtime && item.OnBreak {
+			return "In progress: currently on break, work hours frozen at break start"
+		}
+		if item.IsRealtime {
+			return "In progress: calculated to current time"
+		}
 		return "Pending: not finalized"
 	default:
 		if item.Status != "" {

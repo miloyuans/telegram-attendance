@@ -6,6 +6,21 @@
 4. 初次测试 allowed_chat_ids 保持 []，表示允许所有群，方便先拿到真实 chat_id
 5. 终端日志里看到真实 chat_id 后，可以再填入 allowed_chat_ids；为空允许所有群，非空只允许白名单群使用打卡、报表、取消等功能
 
+v22 核心变化：
+
+1. 汇总报表不再根据 simple / interactive / all 模式自动切换语言，避免同一个群因为两种模式生成两份报表。
+2. slist 和自动月度汇总默认只发送 1 个英文 XLSX 附件。
+3. 用户明确输入 slist zh 或 slist cn 时，只发送 1 个中文 XLSX 附件。
+4. /slist、/slist@bot、/slist@bot zh 均兼容。
+5. report_multi_format_enabled 保留为历史兼容配置，但 slist 和自动月度汇总现在统一按单 XLSX 输出。
+
+v21 核心变化：
+
+1. 新增 report_multi_format_enabled 报告多格式输出开关，默认 false。
+2. 默认 slist 和自动月度汇总只发送一个 XLSX 附件，避免群消息附件过多。
+3. v22 起，为避免重复报表，slist 和自动月度汇总统一改为单 XLSX 输出，不再根据该开关发送多个附件。
+4. 新增环境变量 REPORT_MULTI_FORMAT_ENABLED=true/false，保留兼容。
+
 v20 核心变化：
 
 1. 修复交互按钮模式最终结果仍出现激励语和固定标语的问题。
@@ -87,7 +102,7 @@ v17 核心变化：
 
 - 新数据默认写入 data/chats/chat_<chat_id>/attendance.jsonl
 - 每个群自动独立目录，避免不同群数据混合
-- 个人 HTML 和全员 XLSX 报表默认写入 reports/chats/chat_<chat_id>/
+- 个人 HTML 和全员汇总报表默认写入 reports/chats/chat_<chat_id>/
 - data_file 保留为旧版单文件兼容读取路径；新数据不再写入旧 data_file
 
 常用配置：
@@ -122,8 +137,8 @@ allowed_chat_ids：群白名单。
 
 报表说明：
 - list：生成个人当月 HTML 打卡日历。
-- slist：生成当前月全员汇总，并同时发送 HTML + XLSX 两个附件。
-- 自动月度汇总：默认每月 1 号 15:00 后发送上月完整全员 HTML + XLSX 工时统计表。
+- slist：生成当前月全员汇总。默认只发送 1 个英文 XLSX；输入 slist zh 或 slist cn 时只发送 1 个中文 XLSX。
+- 自动月度汇总：默认每月 1 号 15:00 后发送上月完整全员工时统计表；默认只发送 1 个英文 XLSX。
 - 自动月度汇总防重复状态保存在 state_file 的 monthly_summary_sent 中。
 - monthly_summary_chat_ids 为空时，优先使用 allowed_chat_ids；如果 allowed_chat_ids 也为空，会从群数据目录和旧 data_file 中推断群 ID。
 
@@ -155,6 +170,7 @@ INTERACTIVE_TRIGGER_KEYWORDS=/start,start
 INTERACTION_EXIT_KEYWORDS=exit,quit,close,clos,closure
 SUMMARY_KEEP_MONTHS=3
 MANUAL_COMMAND_DEDUPE_SECONDS=20
+REPORT_MULTI_FORMAT_ENABLED=false
 MONTHLY_SUMMARY_ENABLED=true
 MONTHLY_SUMMARY_DAY=1
 MONTHLY_SUMMARY_HOUR=15
@@ -162,3 +178,9 @@ MONTHLY_SUMMARY_MINUTE=0
 MONTHLY_SUMMARY_CHAT_IDS=-1001234567890,-1009876543210
 DEBUG=true
 CONFIG_FILE=config.json
+
+## v23 realtime open-shift work-hour calculation
+
+Summary reports now include current-day unfinished shifts in realtime. If a user has checked in but has not checked out, the report uses the current generation time as the temporary calculation end time. If the user is currently on break, the active break duration is deducted through the current generation time, so the counted work hours effectively stop at the break-start point until the user comes back from break. Past finalized days without a check-out are still treated as abnormal and are not counted.
+
+The summary XLSX also includes a Monthly break duration column, and each day cell includes Break intervals / 休息明细 details.

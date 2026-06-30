@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-const version = "2026-06-30-attendance-v20-interactive-no-motivation"
+const version = "2026-06-30-attendance-v22-summary-xlsx-en-default"
 
 // =========================
 // 配置
@@ -51,6 +51,7 @@ type Config struct {
 	MotivationTimeoutSeconds   int               `json:"motivation_timeout_seconds"`
 	MotivationLogFailures      bool              `json:"motivation_log_failures"`
 	ManualCommandDedupeSeconds int               `json:"manual_command_dedupe_seconds"`
+	ReportMultiFormatEnabled   bool              `json:"report_multi_format_enabled"`
 	UserAliases                map[string]string `json:"user_aliases"`
 }
 
@@ -89,6 +90,7 @@ func defaultConfig() Config {
 		MotivationTimeoutSeconds:   2,
 		MotivationLogFailures:      false,
 		ManualCommandDedupeSeconds: 20,
+		ReportMultiFormatEnabled:   false,
 		UserAliases:                map[string]string{},
 	}
 }
@@ -201,6 +203,9 @@ func loadConfig() (Config, error) {
 			return cfg, fmt.Errorf("MANUAL_COMMAND_DEDUPE_SECONDS 必须是大于等于 0 的整数: %s", v)
 		}
 		cfg.ManualCommandDedupeSeconds = n
+	}
+	if v := strings.TrimSpace(os.Getenv("REPORT_MULTI_FORMAT_ENABLED")); v != "" {
+		cfg.ReportMultiFormatEnabled = parseBoolValue(v)
 	}
 	if v := strings.TrimSpace(os.Getenv("DEBUG")); v != "" {
 		cfg.Debug = strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")

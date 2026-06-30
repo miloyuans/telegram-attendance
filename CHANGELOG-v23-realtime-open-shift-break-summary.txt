@@ -1,0 +1,14 @@
+# v23 - Realtime open-shift work hours and break-duration summary
+
+1. Summary reports now calculate unfinished current-day shifts in realtime:
+   - if the user has checked in but not checked out, work hours are calculated up to the report generation time;
+   - completed break intervals are deducted from realtime work hours;
+   - if the user is currently on break, work hours are effectively frozen at the break-start time by deducting the active break interval through the report generation time.
+
+2. Reports now include break-duration statistics:
+   - each day cell includes a Break intervals / 休息明细 line;
+   - the final summary columns include Monthly work hours / 当月总工时 and Monthly break duration / 当月离开/休息总时长.
+
+3. Pending active shifts remain visually marked as pending/in progress, but their realtime work duration is included in the monthly total for easier lookup during the day.
+
+4. Past finalized days without check-out still remain abnormal and are not counted.

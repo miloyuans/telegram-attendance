@@ -1,0 +1,7 @@
+v21 - report multi-format switch
+
+1. Added report_multi_format_enabled configuration, default false.
+2. slist and automatic monthly summary now send only one XLSX attachment by default.
+3. When report_multi_format_enabled=true, summary reports send HTML + XLSX attachments.
+4. Added REPORT_MULTI_FORMAT_ENABLED environment variable.
+5. Kept report language behavior from v19: interactive/all reports are English, simple reports are Chinese.
